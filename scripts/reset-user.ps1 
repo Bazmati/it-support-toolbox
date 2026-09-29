@@ -1,0 +1,43 @@
+<#
+.SYNOPSIS
+    Réinitialise un compte utilisateur AD : mot de passe + déblocage + expiration.
+.DESCRIPTION
+    Automatise la tâche la plus fréquente du support N1 :
+    - Réinitialisation du mot de passe (généré aléatoirement)
+    - Déblocage du compte s'il est verrouillé
+    - Force le changement de mot de passe à la prochaine ouverture
+.EXAMPLE
+    .\reset-user.ps1 -Identity prenom.nom
+.NOTES
+    Nécessite le module ActiveDirectory et des droits de support.
+#>
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Identity
+)
+
+Import-Module ActiveDirectory -ErrorAction Stop
+
+# Vérifier que l'utilisateur existe
+$user = Get-ADUser -Identity $Identity -Properties LockedOut, Enabled
+if (-not $user) { Write-Error "Utilisateur introuvable."; exit 1 }
+if (-not $user.Enabled) { Write-Warning "Le compte est DESACTIVE - verifier avec la RH avant de reinitialiser." }
+
+# Générer un mot de passe temporaire (12 caracteres)
+$chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789' | ForEach-Object { [char]$_ }
+$tempPassword = (-join (1..12 | ForEach-Object { Get-Random -InputObject $chars -Count 1 })) -join ''
+$securePassword = ConvertTo-SecureString $tempPassword -AsPlainText -Force
+
+# 1. Reinitialiser le mot de passe + changement force a la prochaine ouverture
+Set-ADAccountPassword -Identity $Identity -Reset -NewPassword $securePassword
+Set-ADUser -Identity $Identity -ChangePasswordAtLogon $true
+
+# 2. Debloquer le compte si verrouille
+if ($user.LockedOut) {
+    Unlock-ADAccount -Identity $Identity
+    Write-Host "Compte debloque." -ForegroundColor Yellow
+}
+
+Write-Host "Mot de passe reinitialise pour '$Identity'." -ForegroundColor Green
+Write-Host "Mot de passe temporaire : $tempPassword" -ForegroundColor Cyan
+Write-Host "Transmettre par un canal securise (telphone, jamais par email en clair), puis effacer cette ligne de l'historique."
